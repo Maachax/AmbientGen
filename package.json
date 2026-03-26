@@ -1,0 +1,30 @@
+{
+  "name": "ambient-room",
+  "version": "1.0.0",
+  "description": "Generative ambient music engine — minimalist patterns with phased voices, inspired by Philip Glass",
+  "type": "module",
+  "main": "core/musicEngine.js",
+  "scripts": {
+    "start": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "keywords": [
+    "generative-music",
+    "ambient",
+    "minimalism",
+    "algorithmic-composition",
+    "tone.js",
+    "web-audio",
+    "philip-glass"
+  ],
+  "author": "",
+  "license": "CC-BY-NC-SA-4.0",
+  "dependencies": {
+    "tone": "^14.8.49",
+    "tonal": "^6.3.0"
+  },
+  "devDependencies": {
+    "vite": "^5.0.0"
+  }
+}
