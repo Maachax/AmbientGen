@@ -26,7 +26,7 @@ import {
 import { voices, voicesByName } from "../audio/synths.js";
 import { createParameterDrift } from "../audio/parameterDrift.js";
 import { createVoiceScheduler } from "../audio/voiceScheduler.js";
-import { getRandomScale } from "../theory/randomScale.js";
+import { getRandomScale, getNeighborScale } from "../theory/randomScale.js";
 import { getChordProgression } from "../theory/chords.js";
 import { createPatternManager } from "../rhythm/patterns.js";
 
@@ -45,6 +45,16 @@ export function createMusicEngine(config = {}) {
   let DEBUG = debug;
   const log = (...args) => { if (DEBUG) console.log("[AmbientRoom]", ...args); };
 
+  // ========================
+  // EVENT EMITTER
+  // ========================
+  const listeners = {};
+
+  function emit(event, data) {
+    if (!listeners[event]) return;
+    for (const fn of listeners[event]) fn(data);
+  }
+
   // Humanization
   const HUMANIZE_MAX_MS = 0.025;
   let humanizeEnabled = humanize;
@@ -62,6 +72,10 @@ export function createMusicEngine(config = {}) {
   let chordIndex = 0;
   let loopCount = 0;
   let freezeVariations = false;
+
+  // Key modulation
+  let progCounter = 0;
+  let keyModRate = 6; // modulate key every N progressions (~96 bars at 72 BPM)
 
   // Regeneration intervals (in 16th-note ticks)
   const CHORD_CHANGE_TICKS = 64;     // change chord every 64 ticks (4 bars)
@@ -98,13 +112,16 @@ export function createMusicEngine(config = {}) {
   // ========================
   // Each voice has its own cycle length, density, octave, and note picking strategy.
   // Different cycle lengths = phasing effect (core of the Glass aesthetic).
+  // octaveRange: [min, max] enables slow octave drift. octaveDriftTicks: [min, max] controls interval.
 
   const VOICE_CONFIGS = {
     deepBass: {
       cycleLength: 8,
       density: 0.25,
       octave: 2,
-      noteStrategy: "root",       // always plays root
+      octaveRange: [2, 3],
+      octaveDriftTicks: [512, 1024],
+      noteStrategy: "root",
       duration: "2n",
       mutateEvery: 256,
       regenEvery: 512,
@@ -113,7 +130,7 @@ export function createMusicEngine(config = {}) {
       cycleLength: 16,
       density: 0.2,
       octave: 3,
-      noteStrategy: "chord",      // plays full chord
+      noteStrategy: "chord",
       duration: "1n",
       mutateEvery: 256,
       regenEvery: 512,
@@ -122,7 +139,9 @@ export function createMusicEngine(config = {}) {
       cycleLength: 7,             // prime number = nice phasing
       density: 0.5,
       octave: 5,
-      noteStrategy: "sequence",   // cycles through a small note set
+      octaveRange: [4, 6],
+      octaveDriftTicks: [384, 768],
+      noteStrategy: "sequence",
       duration: "8n",
       mutateEvery: 96,
       regenEvery: 384,
@@ -131,6 +150,8 @@ export function createMusicEngine(config = {}) {
       cycleLength: 5,             // prime = maximum phasing
       density: 0.6,
       octave: 4,
+      octaveRange: [3, 5],
+      octaveDriftTicks: [384, 768],
       noteStrategy: "sequence",
       duration: "16n",
       mutateEvery: 80,
@@ -140,6 +161,8 @@ export function createMusicEngine(config = {}) {
       cycleLength: 11,            // prime
       density: 0.35,
       octave: 4,
+      octaveRange: [3, 5],
+      octaveDriftTicks: [384, 768],
       noteStrategy: "sequence",
       duration: "4n",
       mutateEvery: 128,
@@ -149,12 +172,30 @@ export function createMusicEngine(config = {}) {
       cycleLength: 9,
       density: 0.4,
       octave: 6,
+      octaveRange: [5, 7],
+      octaveDriftTicks: [512, 1024],
       noteStrategy: "sequence",
       duration: "16n",
       mutateEvery: 64,
       regenEvery: 256,
     },
   };
+
+  // ========================
+  // OCTAVE DRIFT STATE
+  // ========================
+  const voiceOctaves = {};
+  const voiceOctaveDriftAt = {};
+
+  function initOctaveDrift() {
+    for (const [name, cfg] of Object.entries(VOICE_CONFIGS)) {
+      voiceOctaves[name] = cfg.octave;
+      if (cfg.octaveRange) {
+        const [dMin, dMax] = cfg.octaveDriftTicks;
+        voiceOctaveDriftAt[name] = dMin + Math.floor(Math.random() * (dMax - dMin));
+      }
+    }
+  }
 
   // ========================
   // PATTERN MANAGERS (one per voice)
@@ -174,6 +215,7 @@ export function createMusicEngine(config = {}) {
       });
       regenerateNoteSequence(name);
     }
+    initOctaveDrift();
   }
 
   function regenerateNoteSequence(voiceName) {
@@ -251,28 +293,40 @@ export function createMusicEngine(config = {}) {
       });
     }
 
+    // Drift tempo (±8% wander around starting BPM)
+    const baseBpm = Tone.getTransport().bpm.value;
+    paramDrift.addTarget({
+      name: "bpm",
+      getter: () => Tone.getTransport().bpm.value,
+      apply: (val, dur) => Tone.getTransport().bpm.rampTo(val, dur),
+      range: [baseBpm * 0.92, baseBpm * 1.08],
+      stepMeasures: [30, 60],
+      rampMeasures: [8, 16],
+    });
+
     if (paramDriftEnabled) paramDrift.start();
   }
 
   // ========================
   // NOTE PICKING
   // ========================
-  function getNoteForVoice(voiceName, time) {
+  function getNoteForVoice(voiceName) {
     const cfg = VOICE_CONFIGS[voiceName];
+    const octave = voiceOctaves[voiceName] ?? cfg.octave;
 
     switch (cfg.noteStrategy) {
       case "root":
-        return `${chordsProg.chordProgression[chordIndex]}${cfg.octave}`;
+        return `${chordsProg.chordProgression[chordIndex]}${octave}`;
 
       case "chord":
         // Return array of notes for PolySynth
-        return currentChordNotes().map((n) => `${n}${cfg.octave}`);
+        return currentChordNotes().map((n) => `${n}${octave}`);
 
       case "sequence": {
         const seq = voiceNoteSequences[voiceName];
         if (!seq || seq.length === 0) return null;
         const idx = voiceSeqIndex[voiceName] || 0;
-        const note = `${seq[idx]}${cfg.octave}`;
+        const note = `${seq[idx]}${octave}`;
         voiceSeqIndex[voiceName] = (idx + 1) % seq.length;
         return note;
       }
@@ -292,12 +346,24 @@ export function createMusicEngine(config = {}) {
     if (beatIndex % CHORD_CHANGE_TICKS === 0) {
       chordIndex = (chordIndex + 1) % chordsProg.chordProgression.length;
       log("Chord →", chordsProg.chordProgression[chordIndex]);
-      // On chord change, refresh note sequences so voices adapt
       regenerateAllNoteSequences();
+      emit("chord-change", {
+        chord: chordsProg.chordProgression[chordIndex],
+        progression: chordsProg.chordProgression.slice(),
+      });
     }
 
-    // --- New progression ---
+    // --- New progression + key modulation ---
     if (!freezeVariations && beatIndex % PROG_CHANGE_TICKS === 0) {
+      progCounter++;
+      if (progCounter >= keyModRate) {
+        progCounter = 0;
+        const neighbor = getNeighborScale(randomNote, randomMode);
+        randomNote = neighbor.randomNote;
+        randomMode = neighbor.randomMode;
+        log("Key modulation →", randomNote, randomMode);
+        emit("scale-change", { note: randomNote, mode: randomMode });
+      }
       chordsProg = getChordProgression(randomNote, randomMode);
       notePool = buildNotePool(chordsProg);
       chordIndex = 0;
@@ -309,6 +375,25 @@ export function createMusicEngine(config = {}) {
     if (!freezeVariations) {
       for (const name of Object.keys(patternManagers)) {
         patternManagers[name].tick();
+      }
+    }
+
+    // --- Octave drift ---
+    for (const name of Object.keys(VOICE_CONFIGS)) {
+      const cfg = VOICE_CONFIGS[name];
+      if (!cfg.octaveRange) continue;
+      if (beatIndex >= voiceOctaveDriftAt[name]) {
+        const [min, max] = cfg.octaveRange;
+        const current = voiceOctaves[name];
+        const candidates = [];
+        if (current > min) candidates.push(current - 1);
+        if (current < max) candidates.push(current + 1);
+        if (candidates.length > 0) {
+          voiceOctaves[name] = candidates[Math.floor(Math.random() * candidates.length)];
+          log(`${name} octave →`, voiceOctaves[name]);
+        }
+        const [dMin, dMax] = cfg.octaveDriftTicks;
+        voiceOctaveDriftAt[name] = beatIndex + dMin + Math.floor(Math.random() * (dMax - dMin));
       }
     }
 
@@ -326,16 +411,11 @@ export function createMusicEngine(config = {}) {
         const voice = voicesByName[name];
         if (!voice) continue;
 
-        const noteOrNotes = getNoteForVoice(name, time);
+        const noteOrNotes = getNoteForVoice(name);
         if (!noteOrNotes) continue;
 
         try {
-          if (Array.isArray(noteOrNotes)) {
-            // Polyphonic (pad)
-            voice.triggerAttackRelease(noteOrNotes, cfg.duration, humanizeTime(time));
-          } else {
-            voice.triggerAttackRelease(noteOrNotes, cfg.duration, humanizeTime(time));
-          }
+          voice.triggerAttackRelease(noteOrNotes, cfg.duration, humanizeTime(time));
         } catch (e) {
           log("trigger error", name, e.message);
         }
@@ -363,7 +443,11 @@ export function createMusicEngine(config = {}) {
     setGlobalHeadroom(globalHeadroom);
     setReverbDepth(reverbDepth);
     initPatterns();
-    voiceScheduler = createVoiceScheduler(voices, { debug: DEBUG });
+    voiceScheduler = createVoiceScheduler(voices, {
+      debug: DEBUG,
+      onFadeIn: (name) => emit("voice-fade-in", name),
+      onFadeOut: (name) => emit("voice-fade-out", name),
+    });
     initParameterDrift();
     log("Initialized at", bpm, "BPM");
   }
@@ -373,6 +457,17 @@ export function createMusicEngine(config = {}) {
   // ========================
   return {
     initialize,
+
+    // --- Event emitter ---
+    on(event, fn) {
+      if (!listeners[event]) listeners[event] = [];
+      listeners[event].push(fn);
+    },
+
+    off(event, fn) {
+      if (!listeners[event]) return;
+      listeners[event] = listeners[event].filter((f) => f !== fn);
+    },
 
     start() {
       if (Tone.getContext().state !== "running") {
@@ -421,12 +516,18 @@ export function createMusicEngine(config = {}) {
       notePool = buildNotePool(chordsProg);
       chordIndex = 0;
       regenerateAllNoteSequences();
+      emit("scale-change", { note: randomNote, mode: randomMode });
       log("New scale:", randomNote, randomMode);
       return { note: randomNote, mode: randomMode };
     },
 
     getScale() {
       return { note: randomNote, mode: randomMode };
+    },
+
+    // --- Key modulation ---
+    setKeyModulationRate(n) {
+      keyModRate = Math.max(1, n);
     },
 
     // --- Voice control (manual override) ---
@@ -461,17 +562,20 @@ export function createMusicEngine(config = {}) {
       chordIndex = 0;
       beatIndex = 0;
       loopCount = 0;
+      progCounter = 0;
 
       for (const name of Object.keys(patternManagers)) {
         patternManagers[name].forceRegenerate();
         regenerateNoteSequence(name);
       }
 
+      initOctaveDrift();
       if (voiceScheduler) voiceScheduler.forceRethink();
 
       const newBpm = 60 + Math.floor(Math.random() * 30); // 60-90 BPM
       Tone.getTransport().bpm.rampTo(newBpm, 1);
 
+      emit("scale-change", { note: randomNote, mode: randomMode });
       log("Full regeneration:", randomNote, randomMode, "at", newBpm, "BPM");
       return { note: randomNote, mode: randomMode, bpm: newBpm };
     },
@@ -520,6 +624,7 @@ export function createMusicEngine(config = {}) {
         progression: chordsProg.chordProgression.slice(),
         bpm: Tone.getTransport().bpm.value,
         voices: voiceScheduler ? voiceScheduler.getStates() : [],
+        voiceOctaves: { ...voiceOctaves },
         patterns: Object.fromEntries(
           Object.entries(patternManagers).map(([k, pm]) => [k, pm.getPattern()])
         ),

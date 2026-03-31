@@ -42,19 +42,33 @@ export function generateMinimalistPattern(cycleLength, density = 0.4, opts = {})
 }
 
 /**
- * Slightly mutate a pattern (shift one note by ±1 step).
+ * Mutate a pattern. Three types:
+ * - shift (60%): move one step ±1 position
+ * - rotate (30%): phase-shift entire pattern by +1 step (Glass phasing)
+ * - invert (10%): mirror pattern within the cycle
  */
 export function mutatePattern(pattern, cycleLength) {
   if (!pattern || pattern.length < 2) return pattern;
-  const copy = pattern.slice();
-  const idx = 1 + Math.floor(Math.random() * (copy.length - 1));
-  const dir = Math.random() < 0.5 ? -1 : 1;
-  const candidate = (copy[idx] + dir + cycleLength) % cycleLength;
-  if (!copy.includes(candidate)) {
-    copy[idx] = candidate;
-    copy.sort((a, b) => a - b);
+  const roll = Math.random();
+
+  if (roll < 0.6) {
+    // Shift one step ±1
+    const copy = pattern.slice();
+    const idx = 1 + Math.floor(Math.random() * (copy.length - 1));
+    const dir = Math.random() < 0.5 ? -1 : 1;
+    const candidate = (copy[idx] + dir + cycleLength) % cycleLength;
+    if (!copy.includes(candidate)) {
+      copy[idx] = candidate;
+      copy.sort((a, b) => a - b);
+    }
+    return copy;
+  } else if (roll < 0.9) {
+    // Rotate: phase-shift entire pattern +1 step
+    return pattern.map((s) => (s + 1) % cycleLength).sort((a, b) => a - b);
+  } else {
+    // Invert: mirror within cycle
+    return pattern.map((s) => cycleLength - 1 - s).sort((a, b) => a - b);
   }
-  return copy;
 }
 
 /**
