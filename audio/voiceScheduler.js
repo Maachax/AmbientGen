@@ -12,20 +12,21 @@ import * as Tone from "tone";
 //   - manualOverride: null | true | false (user forced on/off)
 //   - fadeGain: reference to the voice's fade gain node
 
-const FADE_IN_SECONDS = 4;
-const FADE_OUT_SECONDS = 6;
-const MIN_ACTIVE = 2;
-const MAX_ACTIVE = 4;
-
-// How many measures before reconsidering voice arrangement
-const RETHINK_MEASURES_MIN = 16;
-const RETHINK_MEASURES_MAX = 48;
-
 function pickIntRange(a, b) {
   return Math.floor(a + Math.random() * (b - a + 1));
 }
 
-export function createVoiceScheduler(voices, { debug = false } = {}) {
+export function createVoiceScheduler(voices, {
+  debug = false,
+  fadeIn: fadeInSeconds = 4,
+  fadeOut: fadeOutSeconds = 6,
+  minActive = 2,
+  maxActive = 4,
+  rethinkMin = 16,
+  rethinkMax = 48,
+  onFadeIn = null,
+  onFadeOut = null,
+} = {}) {
   const states = voices.map((v) => ({
     voice: v,
     active: false,
@@ -40,17 +41,19 @@ export function createVoiceScheduler(voices, { debug = false } = {}) {
     if (debug) console.log("[VoiceScheduler]", ...args);
   }
 
-  function fadeIn(state) {
+  function fadeInVoice(state) {
     if (state.active) return;
     state.active = true;
-    state.voice.fadeGain.gain.rampTo(1, FADE_IN_SECONDS);
+    state.voice.fadeGain.gain.rampTo(1, fadeInSeconds);
+    if (onFadeIn) onFadeIn(state.voice.name);
     log("fade in:", state.voice.name);
   }
 
-  function fadeOut(state) {
+  function fadeOutVoice(state) {
     if (!state.active) return;
     state.active = false;
-    state.voice.fadeGain.gain.rampTo(0, FADE_OUT_SECONDS);
+    state.voice.fadeGain.gain.rampTo(0, fadeOutSeconds);
+    if (onFadeOut) onFadeOut(state.voice.name);
     log("fade out:", state.voice.name);
   }
 
@@ -61,12 +64,12 @@ export function createVoiceScheduler(voices, { debug = false } = {}) {
     const forcedOff = states.filter((s) => s.manualOverride === false);
 
     // Apply forced states
-    for (const s of forcedOn) fadeIn(s);
-    for (const s of forcedOff) fadeOut(s);
+    for (const s of forcedOn) fadeInVoice(s);
+    for (const s of forcedOff) fadeOutVoice(s);
 
     // Determine target count for auto voices
     const forcedOnCount = forcedOn.length;
-    const desiredTotal = pickIntRange(MIN_ACTIVE, MAX_ACTIVE);
+    const desiredTotal = pickIntRange(minActive, maxActive);
     const autoTarget = Math.max(0, desiredTotal - forcedOnCount);
 
     // Shuffle auto states for variety
@@ -79,13 +82,13 @@ export function createVoiceScheduler(voices, { debug = false } = {}) {
     // Activate first N, deactivate rest
     for (let i = 0; i < shuffled.length; i++) {
       if (i < autoTarget) {
-        fadeIn(shuffled[i]);
+        fadeInVoice(shuffled[i]);
       } else {
-        fadeOut(shuffled[i]);
+        fadeOutVoice(shuffled[i]);
       }
     }
 
-    nextRethinkAt = measureCounter + pickIntRange(RETHINK_MEASURES_MIN, RETHINK_MEASURES_MAX);
+    nextRethinkAt = measureCounter + pickIntRange(rethinkMin, rethinkMax);
     log("rethink → active:", getActiveNames(), "next at measure:", nextRethinkAt);
   }
 
@@ -110,7 +113,7 @@ export function createVoiceScheduler(voices, { debug = false } = {}) {
 
   function dispose() {
     stop();
-    for (const s of states) fadeOut(s);
+    for (const s of states) fadeOutVoice(s);
   }
 
   // --- Manual override API ---
@@ -119,8 +122,8 @@ export function createVoiceScheduler(voices, { debug = false } = {}) {
     const s = states.find((st) => st.voice.name === name);
     if (!s) return;
     s.manualOverride = enabled;
-    if (enabled) fadeIn(s);
-    else fadeOut(s);
+    if (enabled) fadeInVoice(s);
+    else fadeOutVoice(s);
   }
 
   function releaseVoice(name) {
@@ -135,10 +138,10 @@ export function createVoiceScheduler(voices, { debug = false } = {}) {
     if (!s) return;
     if (s.manualOverride === true) {
       s.manualOverride = false;
-      fadeOut(s);
+      fadeOutVoice(s);
     } else {
       s.manualOverride = true;
-      fadeIn(s);
+      fadeInVoice(s);
     }
     return s.manualOverride;
   }
