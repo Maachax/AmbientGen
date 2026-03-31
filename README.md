@@ -77,8 +77,6 @@ ambient-room/
 │   └── chords.js           Chord progressions from scale degrees
 ├── rhythm/
 │   └── patterns.js         Minimalist repeating pattern generation
-├── utils/
-│   └── generateConditionalArray.js
 ├── core/
 │   └── musicEngine.js      Main orchestrator
 ├── example.js              Usage example
