@@ -5,6 +5,7 @@
 
 import * as Tone from "tone";
 import { createMusicEngine } from "./core/musicEngine.js";
+import { createVisualizer } from "./ui/visualizer.js";
 
 // 1. Create engine
 const engine = createMusicEngine({
@@ -18,18 +19,23 @@ const engine = createMusicEngine({
 // 2. Initialize (sets up audio graph, patterns, voice scheduler)
 engine.initialize();
 
-// 3. Start on user gesture (required by browsers)
+// 3. Create visualizer (attaches to DOM, listens to engine events)
+const viz = createVisualizer(engine);
+
+// 4. Start on user gesture (required by browsers)
 document.addEventListener(
   "click",
   async () => {
     await Tone.start();
     engine.start();
+    viz.start();
+    document.getElementById("start-screen").style.opacity = "0";
     console.log("Ambient Room started");
   },
   { once: true }
 );
 
-// 4. Expose to console for experimentation
+// 5. Expose to console for experimentation
 window.engine = engine;
 
 console.log(`
@@ -50,12 +56,14 @@ console.log(`
 ║  engine.releaseVoice("glass")    Auto    ║
 ║  engine.toggleVoice("glass")             ║
 ║                                          ║
-║  Voices: deepBass, pad, glass,           ║
-║          pulse, drift, shimmer           ║
-║                                          ║
 ║  engine.freeze()          Freeze         ║
 ║  engine.setReverb(3)      More reverb    ║
+║  engine.setKeyModulationRate(4)          ║
+║  engine.on("chord-change", fn)           ║
 ║  engine.getState()        Full state     ║
+║                                          ║
+║  Voices: deepBass, pad, glass,           ║
+║          pulse, drift, shimmer           ║
 ║                                          ║
 ╚══════════════════════════════════════════╝
 `);
